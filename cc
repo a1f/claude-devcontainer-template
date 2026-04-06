@@ -233,10 +233,11 @@ cmd_rebuild() {
 
 cmd_urls() {
     load_conf
+    container_running || die "container $CONTAINER_NAME is not running — run 'cc start'"
     echo "Forwarded ports for $CONTAINER_NAME:"
-    for mapping in $PORTS; do
-        local host_port="${mapping%%:*}"
-        echo "  http://localhost:$host_port"
+    docker port "$CONTAINER_NAME" 2>/dev/null | while read -r line; do
+        local host_part="${line##* -> }"
+        echo "  http://$host_part"
     done
 }
 
