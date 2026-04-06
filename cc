@@ -28,10 +28,29 @@ container_exists() {
     docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER_NAME:-}" 2>/dev/null
 }
 
+port_available() {
+    ! lsof -i :"$1" -sTCP:LISTEN >/dev/null 2>&1
+}
+
+find_free_port() {
+    local port="$1"
+    while ! port_available "$port"; do
+        port=$((port + 1))
+    done
+    echo "$port"
+}
+
 port_flags() {
     local flags=""
     for mapping in $PORTS; do
-        flags="$flags -p $mapping"
+        local host_port="${mapping%%:*}"
+        local container_port="${mapping##*:}"
+        local actual_port
+        actual_port=$(find_free_port "$host_port")
+        if [[ "$actual_port" != "$host_port" ]]; then
+            echo "  Port $host_port in use, using $actual_port -> $container_port" >&2
+        fi
+        flags="$flags -p $actual_port:$container_port"
     done
     echo "$flags"
 }
