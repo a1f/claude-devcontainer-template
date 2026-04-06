@@ -122,8 +122,7 @@ cmd_build() {
 cmd_start() {
     load_conf
     if container_running; then
-        echo "Container $CONTAINER_NAME already running, attaching..."
-        cmd_attach
+        echo "Container $CONTAINER_NAME already running. Use 'cc shell' to open a shell."
         return
     fi
 
@@ -156,14 +155,13 @@ cmd_start() {
         die "container $CONTAINER_NAME is not running"
     fi
 
-    echo "Attaching tmux..."
-    docker exec -it "$CONTAINER_NAME" tmux new-session -A -s main
+    echo "Container ready. Open a shell with: cc shell"
 }
 
 cmd_attach() {
     load_conf
     container_running || die "container $CONTAINER_NAME is not running — run 'cc start'"
-    docker exec -it "$CONTAINER_NAME" tmux new-session -A -s main
+    docker exec -it "$CONTAINER_NAME" bash
 }
 
 cmd_stop() {
@@ -182,14 +180,24 @@ cmd_stop() {
 cmd_shell() {
     load_conf
     container_running || die "container $CONTAINER_NAME is not running — run 'cc start'"
-    docker exec -it "$CONTAINER_NAME" bash
+    local branch="${1:-}"
+    if [[ -n "$branch" ]]; then
+        docker exec -it -w "/workspace/.worktrees/$branch" "$CONTAINER_NAME" bash
+    else
+        docker exec -it "$CONTAINER_NAME" bash
+    fi
 }
 
 cmd_claude() {
     load_conf
     container_running || die "container $CONTAINER_NAME is not running — run 'cc start'"
+    local branch="${1:-}"
+    local workdir="/workspace"
+    if [[ -n "$branch" ]]; then
+        workdir="/workspace/.worktrees/$branch"
+    fi
     # shellcheck disable=SC2086
-    docker exec -it "$CONTAINER_NAME" claude ${CLAUDE_FLAGS:-}
+    docker exec -it -w "$workdir" "$CONTAINER_NAME" claude ${CLAUDE_FLAGS:-}
 }
 
 cmd_status() {
@@ -213,51 +221,120 @@ cmd_urls() {
     done
 }
 
+cmd_worktree() {
+    load_conf
+    local action="${1:-list}"
+    shift || true
+
+    case "$action" in
+        add)
+            local branch="${1:-}"
+            [[ -n "$branch" ]] || die "usage: cc worktree add <branch-name>"
+            local wt_dir="/workspace/.worktrees/$branch"
+            container_running || die "container $CONTAINER_NAME is not running — run 'cc start'"
+            docker exec -it "$CONTAINER_NAME" git worktree add "$wt_dir" -b "$branch" 2>/dev/null \
+                || docker exec -it "$CONTAINER_NAME" git worktree add "$wt_dir" "$branch"
+            echo "Worktree ready: $wt_dir"
+            echo "Open a shell:  cc shell $branch"
+            ;;
+        list)
+            container_running || die "container $CONTAINER_NAME is not running — run 'cc start'"
+            docker exec -it "$CONTAINER_NAME" git worktree list
+            ;;
+        remove)
+            local branch="${1:-}"
+            [[ -n "$branch" ]] || die "usage: cc worktree remove <branch-name>"
+            container_running || die "container $CONTAINER_NAME is not running — run 'cc start'"
+            docker exec -it "$CONTAINER_NAME" git worktree remove "/workspace/.worktrees/$branch"
+            echo "Removed worktree: $branch"
+            ;;
+        *)
+            die "usage: cc worktree [add|list|remove] [branch-name]"
+            ;;
+    esac
+}
+
 cmd_help() {
     cat <<'EOF'
 cc — Claude Code devcontainer CLI
 
-Usage: cc <command> [options]
+  Run Claude with --dangerously-skip-permissions inside an isolated
+  Docker container with iptables firewall, non-root user, and no
+  host filesystem access. Based on Anthropic's official devcontainer.
 
-Commands:
-  init [--stack X]   Initialize .devcontainer/ from template (stacks: rust, node, python, go)
-  build              Build the Docker image
-  start              Start container with tmux and firewall, then attach
-  attach             Reattach to tmux session
-  stop               Stop and remove container
-  shell              Open a bash shell (no tmux)
-  claude             Launch Claude in bypass-permissions mode
-  status             List running cc containers
-  rebuild            Stop + build + start
-  urls               Print forwarded port URLs
+Setup (once per repo):
+  cc init --stack rust      Initialize .devcontainer/ from template
+  cc build                  Build the Docker image
 
-Environment:
-  ANTHROPIC_API_KEY  Passed into container for Claude auth
-  GH_TOKEN           Passed into container for GitHub auth
-  CC_TEMPLATE_DIR    Override template location (default: script directory)
+Daily workflow:
+  cc start                  Start container in background
+  cc shell                  Open shell in /workspace
+  cc claude                 Launch Claude (bypass-permissions mode)
+  cc urls                   Show forwarded port URLs
+  cc stop                   Stop and remove container
 
-Examples:
-  cc init --stack rust       # Set up for a Rust project
-  cc init --stack python     # Set up for a Python project
-  cc init --stack rust,python # Multi-stack
-  cc build && cc start       # Build and launch
-  cc claude                  # Start Claude session inside container
+Feature branches (worktrees):
+  cc worktree add feature-x   Create worktree + branch
+  cc shell feature-x          Shell into worktree
+  cc claude feature-x         Claude in worktree
+  cc worktree list             List worktrees
+  cc worktree remove feature-x Clean up
+
+Other:
+  cc attach                 Open a shell (alias for shell)
+  cc status                 List all running cc containers
+  cc rebuild                Stop + build + start
+
+Stacks: rust, node, python, go (combine with: --stack rust,python)
+
+Environment variables:
+  ANTHROPIC_API_KEY         Claude auth (passed into container)
+  GH_TOKEN                  GitHub auth (passed into container)
+  CC_TEMPLATE_DIR           Override template location
+
+Typical session:
+  cd ~/dev/my-project
+  cc init --stack rust && cc build    # first time only
+  cc start                            # start container
+  cc worktree add feature-x           # new feature branch
+  cc claude feature-x                 # Claude in worktree
+  # ... work in host tmux windows ...
+  cc worktree remove feature-x        # clean up
+  cc stop                             # end of day
 EOF
+}
+
+cmd_install() {
+    local target="${HOME}/bin/cc"
+    mkdir -p "$(dirname "$target")"
+    ln -sf "$CC_TEMPLATE_DIR/cc" "$target"
+    echo "Installed: $target -> $CC_TEMPLATE_DIR/cc"
+
+    # Check PATH
+    if ! echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/bin"; then
+        echo ""
+        echo "Add to your shell profile (~/.zshrc or ~/.bashrc):"
+        echo "  export PATH=\"\$HOME/bin:\$PATH\""
+    fi
+    echo ""
+    echo "Done. Run 'cc help' from any repo."
 }
 
 # --- main ---
 
 case "${1:-help}" in
-    init)     shift; cmd_init "$@" ;;
-    build)    cmd_build ;;
-    start)    cmd_start ;;
-    attach)   cmd_attach ;;
-    stop)     cmd_stop ;;
-    shell)    cmd_shell ;;
-    claude)   cmd_claude ;;
-    status)   cmd_status ;;
-    rebuild)  cmd_rebuild ;;
-    urls)     cmd_urls ;;
+    init)      shift; cmd_init "$@" ;;
+    build)     cmd_build ;;
+    start)     cmd_start ;;
+    attach)    cmd_attach ;;
+    stop)      cmd_stop ;;
+    shell)     shift; cmd_shell "$@" ;;
+    claude)    shift; cmd_claude "$@" ;;
+    status)    cmd_status ;;
+    rebuild)   cmd_rebuild ;;
+    urls)      cmd_urls ;;
+    worktree)  shift; cmd_worktree "$@" ;;
+    install)   cmd_install ;;
     help|--help|-h) cmd_help ;;
-    *)        die "unknown command: $1 — run 'cc help'" ;;
+    *)         die "unknown command: $1 — run 'cc help'" ;;
 esac
