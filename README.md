@@ -68,6 +68,7 @@ Stacks are Dockerfile overlays appended to a common base image (node:20 + git, t
 | `rust` | rustup + stable toolchain, cargo-watch | crates.io, static.crates.io |
 | `python` | python3, pip, uv | pypi.org, files.pythonhosted.org |
 | `go` | Go 1.23 | proxy.golang.org, sum.golang.org |
+| `swift` | Swift 6.0.3 | download.swift.org, swiftpackageindex.com |
 
 Combine stacks: `cc init --stack rust,python`
 

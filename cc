@@ -77,7 +77,7 @@ cmd_init() {
 
     # Generate cc.conf
     local name ports
-    name="cc-$(repo_name)"
+    name="cc-$(repo_name | tr '[:upper:]' '[:lower:]')"
     ports="3000:3000 5173:5173"
     cat > "$CC_CONF" <<EOF
 # .devcontainer/cc.conf — per-repo Claude devcontainer config
